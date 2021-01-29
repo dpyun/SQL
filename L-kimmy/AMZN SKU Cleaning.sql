@@ -5,7 +5,7 @@ UPDATE [Echovin].dbo.[201901]
 Set SKU = REPLACE(SKU, '_NEW', '');  -- removes string '_NEW' Ex) APL1770_NEW -> APL1770
 UPDATE [Echovin].dbo.[201901]        
 Set SKU = REPLACE(SKU, ' - NEW', ''); -- removes string '- NEW' EX) APL1770 - NEW -> APL1770
-                                      -- If we sold 3 of APL1770, 2 of APL1770 - NEW, 1 of APL1770+FBM, we sold total 3+2+1 = 6 of APL1770 SKUs.
+                                      -- If we sold 3 of APL1770, 2 of APL1770 - NEW, 1 of APL1770_FBM, we sold total 3+2+1 = 6 of APL1770 SKUs.
 UPDATE [Echovin].dbo.[201902]
 Set SKU = REPLACE(SKU, '_FBM', '');  
 UPDATE [Echovin].dbo.[201902]        
