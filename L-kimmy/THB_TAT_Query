@@ -1,0 +1,341 @@
+CREATE TEMP FUNCTION date_adjustment_monday(startDate datetime) AS 
+((
+SELECT
+
+CASE 
+when EXTRACT(DAYOFWEEK FROM startDate) = 1 then datetime_trunc(date_add(startDate, INTERVAL 1 DAY), DAY)
+when EXTRACT(DAYOFWEEK FROM startDate) = 7 then datetime_trunc(date_add(startDate, INTERVAL 2 DAY), DAY)
+
+ELSE startDate
+END
+));
+
+CREATE TEMP FUNCTION date_adjustment_friday(startDate datetime) AS 
+((
+SELECT
+
+CASE 
+when EXTRACT(DAYOFWEEK FROM startDate) = 1 then datetime_add(datetime_trunc(date_add(startDate, INTERVAL -1 DAY), DAY), INTERVAL -1 SECOND) --sunday
+when EXTRACT(DAYOFWEEK FROM startDate) = 7 then datetime_add(datetime_trunc(startDate, DAY), INTERVAL -1 SECOND) --saturday
+
+ELSE startDate
+END
+));
+
+CREATE TEMP FUNCTION REYNOLDS_DATE_DIFF(startDate datetime, endDate datetime) AS 
+((
+SELECT
+datetime_diff( endDate, startDate, minute) - 60*24*2*date_diff(cast(endDate as date) , cast(startDate  as date), week)
+
+));
+CREATE OR REPLACE TABLE 'TurnAround_Data' AS
+with raw_data as(
+
+select 
+JSON_EXTRACT_SCALAR(related_ids, '$.customer_id') as customer_id,
+JSON_EXTRACT_SCALAR(related_ids, '$.mapping_id') as mapping_id,
+json_extract_scalar(anonymized_data, '$.old_stage_slug') as old_slug,
+json_extract_scalar(anonymized_data, '$.new_stage_slug') as new_slug,
+date_adjustment_monday(EXTRACT(DATETIME FROM timestamp AT TIME ZONE 'America/Chicago')) as cast_entry,
+
+EXTRACT(DATETIME FROM timestamp AT TIME ZONE 'America/Chicago') as entry_timestamp,
+
+date_adjustment_friday(EXTRACT(DATETIME FROM cast(json_extract_scalar(anonymized_data, '$.time_left_new_stage') as timestamp) AT TIME ZONE 'America/Chicago')) as cast_end,
+EXTRACT(DATETIME FROM cast(json_extract_scalar(anonymized_data, '$.time_left_new_stage') as timestamp) AT TIME ZONE 'America/Chicago') as end_timestamp,
+date_diff( cast(cast(json_extract_scalar(anonymized_data, '$.time_left_new_stage') as timestamp) as date), cast(timestamp as date) , week) as weekdiff,
+y.carrier_code,
+y.invoice_type,
+
+
+ FROM 'Timeline_Data' as x
+
+inner join (select customer_id,
+mapping_id,
+JSON_EXTRACT_SCALAR(partner_data_extra_data, '$.carrier_code') as carrier_code,
+JSON_EXTRACT_SCALAR(generic_process_mapping_data_extra_data, '$.invoice_type') as invoice_type
+ from `Pipeline_ID` 
+
+where lower(generic_process_name) like 'crm_%'
+
+
+) as y on cast(JSON_EXTRACT_SCALAR(x.related_ids, '$.customer_id') as int) = y.customer_id
+and cast(JSON_EXTRACT_SCALAR(x.related_ids, '$.mapping_id') as int) = y.mapping_id
+
+where
+  type like '%event'
+and json_extract_scalar(anonymized_data, '$.new_stage_slug') is not null
+and json_extract_scalar(anonymized_data, '$.new_stage_process_name') like 'crm_%'
+ 
+ ),
+
+completed AS (
+  SELECT
+  JSON_EXTRACT_SCALAR(related_ids, '$.customer_id') AS customer_id,
+  JSON_EXTRACT_SCALAR(related_ids, '$.mapping_id') as mapping_id,
+  MIN(EXTRACT(DATETIME FROM timestamp AT TIME ZONE 'America/Chicago')) AS A5
+  FROM `timeline`
+  WHERE (JSON_EXTRACT_SCALAR(anonymized_data, '$.new_stage_slug') = 'complete'
+  OR JSON_EXTRACT_SCALAR(anonymized_data, '$.new_stage_slug') = 'pending_completed')
+  GROUP BY crm_customer_id, generic_process_mapping_id
+),
+
+naming_chart as(
+  select 'abbreviated_telephonic' slug, 'Not N/A' category UNION ALL
+  select 'accepted_ha' slug, 'N/A' category UNION ALL
+  select 'assessor_resourcing' slug, 'Scheduling/Assignment' category UNION ALL
+  select 'assigned_for_review' slug, 'Assessment Completion' category UNION ALL
+  select 'assigned_to_ha' slug, 'Scheduling/Assignment' category UNION ALL
+  select 'assigned_to_haagency' slug, 'Scheduling/Assignment' category UNION ALL
+  select 'pending_completed' slug, 'Assessment Completion' category UNION ALL
+  select 'cancelled' slug, 'N/A' category UNION ALL
+  select 'cancelled_from_calendly' slug, 'Time to Appointment' category UNION ALL
+    select 'cancelled_poc_cic' slug, 'Not N/A' category UNION ALL
+    select 'caregiver_assessment' slug, 'Not N/A' category UNION ALL
+    select 'clinical_hold' slug, 'Not N/A' category UNION ALL
+    select 'poc' slug, 'Assessment Completion' category UNION ALL
+    select 'complete' slug, 'Assessment Completion' category UNION ALL
+    select 'contacted' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'dispatched_onsite_assessor' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'dispatched_scheduled_ha' slug, 'N/A' category UNION ALL
+    select 'dispatched_scheduled_onsite' slug, 'Time to Appointment' category UNION ALL
+    select 'dispatched_to_gocanvas' slug, 'Time to Appointment' category UNION ALL
+    select 'dispatched_to_gocanvas_ha' slug, 'N/A' category UNION ALL
+    select 'hold_partner' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'in_progress_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'in_review' slug, 'Assessment Completion' category UNION ALL
+    select 'medical_records' slug, 'Assessment Completion' category UNION ALL
+    select 'multiple_policies' slug, 'Not N/A' category UNION ALL
+    select 'new_onsite_request' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'new_referral' slug, 'Contact Attempted' category UNION ALL
+    select 'new_request_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'no_contact' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'on_hold' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'on_hold_ha' slug, 'N/A' category UNION ALL
+    select 'on_hold_onsite' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'onsite_contacted' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'onsite_urgent' slug, 'Scheduling/Assignment' category UNION ALL
+    select 'poccic_determination' slug, 'Assessment Completion' category UNION ALL
+    select 'qa_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'ready_for_download' slug, 'Assessment Completion' category UNION ALL
+    select 'ready_for_review' slug, 'Assessment Completion' category UNION ALL
+    select 'ready_to_send_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'reinspect' slug, 'Assessment Completion' category UNION ALL
+    select 'remediation_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'reviewed' slug, 'Assessment Completion' category UNION ALL
+    select 'scheduled' slug, 'Time to Appointment' category UNION ALL
+    select 'sent_poc_cic' slug, 'Assessment Completion' category UNION ALL
+    select 'sent_to_DIMS' slug, 'N/A' category UNION ALL
+    select 'sent_to_ha' slug, 'N/A' category UNION ALL
+    select 'telephonic_staffing' slug, 'N/A' category UNION ALL
+    select 'poc' slug, 'N/A' category UNION ALL
+    select 'temp_qa_ready_to_send' slug, 'N/A' category UNION ALL
+    select 'waiting_compliance' slug, 'Scheduling/Assignment' category
+),
+
+naming_category as (
+select *,
+z.category as old_slug_category,
+y.category as new_slug_category,
+
+
+REYNOLDS_DATE_DIFF(x.cast_entry, x.cast_end) as tat_value,
+REYNOLDS_DATE_DIFF(x.cast_entry, x.cast_end ) as stuff
+
+
+
+ from raw_data as x
+ 
+ left join naming_chart as y on x.new_slug = y.slug
+ left join naming_chart as z on x.old_slug = z.slug
+ ),
+
+base_data as(
+ select 
+
+x.customer_id,
+x.mapping_id,
+x.old_slug,
+x.new_slug,
+x.entry_timestamp,
+x.end_timestamp,
+cast_entry,
+cast_end,
+x.carrier_code,
+x.invoice_type, 
+weekdiff,
+stuff,
+CASE when end_timestamp > A5 then 'error value'
+else 'normal value' END as decide_normality
+,
+
+
+CASE
+when new_slug = 'hold_partner' then 'PCR'
+when new_slug = 'on_hold_onsite' then 'PCR'
+when new_slug = 'on_hold' then 'On Hold'
+when new_slug_category = 'Time to Appointment'
+and tat_value >= 3
+THEN 'Scheduled Delay'
+else x.new_slug_category
+END as sub_category
+,
+
+CASE
+when new_slug = 'hold_partner' then new_slug
+when new_slug = 'on_hold_onsite' then new_slug
+when new_slug = 'on_hold' then new_slug
+else null
+END as on_hold_category,
+
+CASE
+when new_slug = 'hold_partner' then tat_value
+when new_slug = 'on_hold_onsite' then tat_value
+when new_slug = 'on_hold' then tat_value
+else null
+END as on_hold_tat_value,
+
+ x.old_slug_category,
+ x.new_slug_category,
+ y.A5 as completed_date,
+z.partner_code ,
+tat_value as adjusted_tat_value
+  from naming_category as x
+left join completed as y on x.crm_customer_id = y.crm_customer_id and
+x.generic_process_mapping_id = y.generic_process_mapping_id
+
+inner join
+(select customer_id, mapping_id, partner_code from `pipeline_data`
+
+where generic_process_name like 'crm_%'
+
+
+
+) as z on
+cast(x.crm_customer_id as int) = z.crm_customer_id and cast(x.generic_process_mapping_id as int) = z.generic_process_mapping_id
+
+order by entry_timestamp
+),
+
+remove_30_assessment as (
+select 
+distinct generic_process_mapping_id
+ from `pipeline_data`
+ where json_extract_scalar(generic_process_mapping_data_extra_data, '$.Idle30DaysComplete') is not null),
+
+match_remove_30_assessment as 
+(
+select 
+
+x.customer_id,
+x.mapping_id,
+x.old_slug,
+x.new_slug,
+x.entry_timestamp,
+x.end_timestamp,
+x.cast_entry,
+x.cast_end,
+x.carrier_code,
+x.invoice_type,
+x.adjusted_tat_value,
+x.weekdiff,
+x.sub_category,
+x.on_hold_category,
+x.on_hold_tat_value,
+x.old_slug_category,
+x.new_slug_category,
+x.completed_date,
+x.partner_code,
+
+
+ from base_data as x
+inner join remove_30_assessment on cast(x.mapping_id as int) = remove_30_assessment.mapping_id
+
+where adjusted_tat_value >= 30
+and sub_category =  'Assessment Completion'
+
+),
+
+get_30_assessment as
+(select 
+
+x.customer_id,
+x.mapping_id,
+x.old_slug,
+x.new_slug,
+x.entry_timestamp,
+x.end_timestamp,
+x.cast_entry,
+x.cast_end,
+x.carrier_code,
+x.invoice_type,
+x.adjusted_tat_value,
+x.weekdiff,
+x.sub_category,
+x.on_hold_category,
+x.on_hold_tat_value,
+x.old_slug_category,
+x.new_slug_category,
+x.completed_date,
+x.partner_code,
+y.adjusted_tat_value as y_adjust_value,
+x.decide_normality,
+x.stuff,
+
+
+ from base_data as x
+
+left join match_remove_30_assessment as y
+on x.customer_id = y.customer_id and x.sub_category = y.sub_category and x.adjusted_tat_value = y.adjusted_tat_value and x.entry_timestamp = y.entry_timestamp
+),
+
+
+final_data as(
+select 
+
+x.stuff,
+x.customer_id,
+x.mapping_id,
+x.old_slug,
+x.new_slug,
+x.entry_timestamp,
+x.end_timestamp,
+x.cast_entry,
+x.cast_end,
+x.carrier_code,
+x.invoice_type,
+
+CASE
+WHEN x.adjusted_tat_value < 0 then 0
+ELSE adjusted_tat_value
+END AS adjusted_tat_value
+,
+x.weekdiff,
+x.sub_category,
+x.on_hold_category,
+x.on_hold_tat_value,
+x.old_slug_category,
+x.new_slug_category,
+x.completed_date,
+x.partner_code,
+x.decide_normality,
+
+
+
+
+ from get_30_assessment as x
+
+where end_timestamp is not null
+and y_adjust_value is null),
+
+final_data as
+(
+select * from final_data 
+
+where decide_normality = 'normal value'
+
+)
+
+
+
+select * from final_data
+
